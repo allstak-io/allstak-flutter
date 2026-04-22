@@ -141,7 +141,9 @@ class AllStak {
         .where((l) => l.isNotEmpty)
         .toList();
     // Drain breadcrumbs
-    final crumbs = _breadcrumbs.isNotEmpty ? List<Map<String, dynamic>>.from(_breadcrumbs) : null;
+    final crumbs = _breadcrumbs.isNotEmpty
+        ? List<Map<String, dynamic>>.from(_breadcrumbs)
+        : null;
     _breadcrumbs.clear();
     await _send('/ingest/v1/errors', {
       'exceptionClass': className,
@@ -220,7 +222,8 @@ class AllStak {
     required int durationMs,
     String direction = 'outbound',
   }) async {
-    final traceId = 'flt-${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}';
+    final traceId =
+        'flt-${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}';
     await _send('/ingest/v1/http-requests', {
       'requests': [
         {
@@ -309,7 +312,8 @@ class AllStak {
           )
           .timeout(const Duration(seconds: 5));
       if (config.debug) {
-        final trim = res.body.length > 160 ? res.body.substring(0, 160) : res.body;
+        final trim =
+            res.body.length > 160 ? res.body.substring(0, 160) : res.body;
         // ignore: avoid_print
         print('[AllStak] POST $path -> ${res.statusCode} $trim');
       }
@@ -358,7 +362,8 @@ class _AllStakHttpClient extends http.BaseClient {
         // fire-and-forget — don't block the caller on ingest
         _allstak.captureRequest(
           method: request.method,
-          host: request.url.host + (request.url.hasPort ? ':${request.url.port}' : ''),
+          host: request.url.host +
+              (request.url.hasPort ? ':${request.url.port}' : ''),
           path: request.url.path.isEmpty ? '/' : request.url.path,
           statusCode: resp.statusCode,
           durationMs: sw.elapsedMilliseconds,
@@ -371,7 +376,8 @@ class _AllStakHttpClient extends http.BaseClient {
       if (!isOwnIngest) {
         _allstak.captureRequest(
           method: request.method,
-          host: request.url.host + (request.url.hasPort ? ':${request.url.port}' : ''),
+          host: request.url.host +
+              (request.url.hasPort ? ':${request.url.port}' : ''),
           path: request.url.path.isEmpty ? '/' : request.url.path,
           statusCode: 0,
           durationMs: sw.elapsedMilliseconds,
