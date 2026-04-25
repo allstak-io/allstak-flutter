@@ -20,6 +20,10 @@ class _NativeChannel {
       MethodChannel('io.allstak.flutter/native');
 }
 
+/// SDK identity sent on the wire as `sdk.name` / `sdk.version` in event metadata.
+const String kAllStakSdkName = 'allstak-flutter';
+const String kAllStakSdkVersion = '1.2.0';
+
 class AllStakConfig {
   final String apiKey;
   final String host;
@@ -28,6 +32,14 @@ class AllStakConfig {
   final String service;
   final Map<String, String> tags;
   final bool debug;
+  // Release-tracking metadata (optional). `dist` is especially useful here to
+  // disambiguate the same release built for iOS vs Android vs web.
+  final String dist;
+  final String commitSha;
+  final String branch;
+  final String platform;
+  final String sdkName;
+  final String sdkVersion;
 
   const AllStakConfig({
     required this.apiKey,
@@ -37,7 +49,26 @@ class AllStakConfig {
     this.service = 'flutter',
     this.tags = const {},
     this.debug = false,
+    this.dist = '',
+    this.commitSha = '',
+    this.branch = '',
+    this.platform = 'flutter',
+    this.sdkName = kAllStakSdkName,
+    this.sdkVersion = kAllStakSdkVersion,
   });
+
+  /// Release-tracking tags merged into every event payload's metadata so the
+  /// dashboard can group / filter by SDK / platform / commit / branch.
+  Map<String, String> releaseTags() {
+    final out = <String, String>{};
+    if (sdkName.isNotEmpty) out['sdk.name'] = sdkName;
+    if (sdkVersion.isNotEmpty) out['sdk.version'] = sdkVersion;
+    if (platform.isNotEmpty) out['platform'] = platform;
+    if (dist.isNotEmpty) out['dist'] = dist;
+    if (commitSha.isNotEmpty) out['commit.sha'] = commitSha;
+    if (branch.isNotEmpty) out['commit.branch'] = branch;
+    return out;
+  }
 }
 
 class AllStak {
@@ -48,7 +79,13 @@ class AllStak {
 
   AllStak._(this.config) {
     _tags.addAll(config.tags);
-    _tags['platform'] = 'flutter';
+    // Release-tracking metadata is stamped onto _tags once at init so every
+    // outgoing event payload (errors, logs, http, db) picks it up via the
+    // existing `metadata` merge — no per-call wiring needed in callers.
+    _tags.addAll(config.releaseTags());
+    if (!_tags.containsKey('platform')) {
+      _tags['platform'] = 'flutter';
+    }
   }
 
   static AllStak init(AllStakConfig config) {
@@ -145,6 +182,10 @@ class AllStak {
         ? List<Map<String, dynamic>>.from(_breadcrumbs)
         : null;
     _breadcrumbs.clear();
+    // Phase 3 — structured frames from Dart stack lines. Dart prints
+    // them as e.g. `#0  MyClass.method (package:foo/foo.dart:42:5)` —
+    // parse into the v2 ErrorIngestRequest.Frame shape.
+    final structured = _parseDartFrames(stackLines);
     await _send('/ingest/v1/errors', {
       'exceptionClass': className,
       'message': message,
@@ -153,6 +194,12 @@ class AllStak {
       'environment': config.environment,
       'release': config.release,
       'level': 'error',
+      // Phase 3 — top-level v2 ingest fields.
+      'sdkName': config.sdkName,
+      'sdkVersion': config.sdkVersion,
+      'platform': config.platform,
+      if (config.dist.isNotEmpty) 'dist': config.dist,
+      if (structured.isNotEmpty) 'frames': structured,
       'user': {
         if (_userId != null) 'id': _userId,
         if (_userEmail != null) 'email': _userEmail,
@@ -162,6 +209,38 @@ class AllStak {
     });
   }
 
+  /// Phase 3 — parse Dart stack-trace lines into v2 Frame[] dicts.
+  ///
+  /// Dart format examples handled:
+  ///   `#0      MyWidget.build (package:my_app/widget.dart:42:7)`
+  ///   `#1      _UserState.handle (file:///path/to/x.dart:13:5)`
+  /// Lines that don't match are skipped so the dashboard never sees
+  /// half-parsed garbage.
+  List<Map<String, dynamic>> _parseDartFrames(List<String> lines) {
+    final out = <Map<String, dynamic>>[];
+    final re = RegExp(r'^#\d+\s+(.+?)\s+\((.+?):(\d+)(?::(\d+))?\)\s*$');
+    for (final line in lines) {
+      final m = re.firstMatch(line);
+      if (m == null) continue;
+      final fn = m.group(1) ?? '';
+      final file = m.group(2) ?? '';
+      final lineno = int.tryParse(m.group(3) ?? '') ?? 0;
+      final colno = int.tryParse(m.group(4) ?? '');
+      final inApp = !file.startsWith('dart:') && !file.startsWith('package:flutter/');
+      out.add({
+        'filename': file,
+        'absPath': file,
+        'function': fn,
+        'lineno': lineno,
+        if (colno != null) 'colno': colno,
+        'inApp': inApp,
+        'platform': 'flutter',
+      });
+      if (out.length >= 50) break;
+    }
+    return out;
+  }
+
   Future<void> captureMessage(String message, {String level = 'info'}) async {
     await _send('/ingest/v1/errors', {
       'exceptionClass': 'Message',
@@ -169,6 +248,11 @@ class AllStak {
       'environment': config.environment,
       'release': config.release,
       'level': level,
+      // Phase 3 — top-level v2 ingest fields.
+      'sdkName': config.sdkName,
+      'sdkVersion': config.sdkVersion,
+      'platform': config.platform,
+      if (config.dist.isNotEmpty) 'dist': config.dist,
       'user': {
         if (_userId != null) 'id': _userId,
         if (_userEmail != null) 'email': _userEmail,
